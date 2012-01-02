@@ -42,7 +42,7 @@ use HTTP::Request;
 use LWP::UserAgent;
 use JSON::Any;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 our $states = { 'ok' => 0, 'warning' => '1', 'critical' => '2', 'unknown' => '3' };
 
@@ -50,7 +50,7 @@ our $states = { 'ok' => 0, 'warning' => '1', 'critical' => '2', 'unknown' => '3'
 
 =head2 new(user => 'user', 'password' => 'pass', 'host' => 'host.name.com', secure => [0|1])
 
-Create the object. There are three required params: user, password and host. If not specified, the constructor will die.
+Create the object. Only the host parameter is required. If not specified, the constructor will die.
 
 Optionally you can pass secure => 1 to make the object access the status API via HTTPS
 
@@ -58,16 +58,14 @@ Optionally you can pass secure => 1 to make the object access the status API via
 
 sub new {
   my ($class, %params) = @_;
-  croak "Must specify user" if (not defined $params{'user'});
-  croak "Must specify password" if (not defined $params{'password'});
-  croak "Must specify host" if (not defined $params{'host'});
   $params{'secure'} = 0 if (not defined $params{'secure'});
+  croak "Must specify host" if (not defined $params{'host'});
 
   my $self = { %params };
 
   bless $self, $class;
 
-  $self->{'_url'} = $self->_get_url;
+  $self->{'_url'} = $self->_get_url();
   $self->{'_ua'} = LWP::UserAgent->new;
   $self->{'_json'} = JSON::Any->new;
 
@@ -82,7 +80,8 @@ sub _get_url {
 sub _dorequest {
   my ($self, $url) = @_;
 
-  #print "$url\n";
+  croak "Must specify user" if (not defined $self->{'user'});
+  croak "Must specify password" if (not defined $self->{'password'});
 
   my $req = HTTP::Request->new( GET => $url );
   $req->header( 'Content-Type' => 'text/json' );
@@ -93,7 +92,7 @@ sub _dorequest {
   if ($res->is_success){
     return ($self->{'_json'}->decode($res->content));
   } else {
-    die sprintf('Response from host: %s', $res->status_line);
+    die sprintf('Response from host: \'%s\' for \'%s\'', $res->status_line, $url);
   }
 }
 
@@ -106,7 +105,14 @@ sub _resolve_filter {
     if ((defined $filter->{'state'}) && (defined $states->{ $filter->{'state'} })) {
       $filter->{'state'} = $states->{ $filter->{'state'} };
     }
-    my $q = join '&', map { "$_=$filter->{$_}" } keys %$filter;
+    my $q = join '&', map {
+       if (ref($filter->{$_}) eq 'ARRAY'){
+          my $key = $_;
+          join '&', map { "$key=$_" } @{ $filter->{$_} }
+       } else {
+          "$_=$filter->{$_}";
+       }
+    } keys %$filter;
     $params = "?$q" if ($q);
   }
   return $params;
@@ -130,6 +136,31 @@ sub host {
   my $params = $self->_resolve_filter({ (defined $filter)?%$filter:() , host => $host });
   return $self->_dorequest("$self->{'_url'}service$params");
 }
+
+=head2 user([$value])
+
+Set/Retrieve the user for the API.
+
+=cut
+
+sub user {
+  my ($self, $value) = @_;
+  $self->{'user'} = $value if (defined $value);
+  return $self->{'user'};
+}
+
+=head2 password([$value])
+
+Set/Retrieve the password for the API.
+
+=cut
+
+sub password {
+  my ($self, $value) = @_;
+  $self->{'password'} = $value if (defined $value);
+  return $self->{'password'};
+}
+
 
 =head2 service($filter)
 
@@ -275,7 +306,11 @@ A filter is a hashref that can contain the following keys with these values:
 
   If you want all unhandled warnings, the filter would be
 
-  { 'filter' => 'unhandled', 'state' => 'warning' } 
+  { 'filter' => 'unhandled', 'state' => 'warning' }
+
+  keys can also have multiple values: if you want only WARNINGS and CRITICALS
+
+  { 'state' => [ 1, 2 ] } 
 
 =head1 AUTHOR
 
